@@ -1,0 +1,68 @@
+#!/bin/sh
+
+# Forces Chrome's Updater to Run
+force_upgrade() {
+  loggedInUser=$( ls -l /dev/console | awk '{print $3}' )
+
+  echo "$loggedInUser"
+
+  echo "`date`: Upgrading Chrome with Updater"
+  sudo -u "$loggedInUser" /Library/Google/GoogleSoftwareUpdate/GoogleSoftwareUpdate.bundle/Contents/Resources/GoogleSoftwareUpdateAgent.app/Contents/MacOS/GoogleSoftwareUpdateAgent -runMode oneshot -userInitiated YES 2> /dev/null
+}
+
+chrome_running() {
+  banner=1
+  while [ $banner -ne 0 ]
+  do
+    banner=`/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "Chrome Updater" -heading "Chrome Restart Required" -description "Chrome has updated and needs to restart for the update to take effect. Please restart Chrome." -icon '/Library/db/account_logo/dblogo.png' -button1 "Restart" -button2 "Delay 1 Hour" -defaultButton 1 -cancelButton 2 -alignCountdown center -timeout 90 -countdown`
+    echo "bannerCode: "${banner}
+    if [ $banner -eq 0 ]; then
+      sudo pkill -o -i "Google Chrome"
+      sleep 2
+      open -a /Applications/Google\ Chrome.app
+    else
+      sleep 3600
+    fi
+  done
+}
+
+echo "--------------"
+file=/Library/Google/GoogleSoftwareUpdate/GoogleSoftwareUpdate.bundle
+chrome_latest_stable="$(curl -s https://omahaproxy.appspot.com/all | grep "mac,stable" | sed "s/,/ /g" | awk '{print $3}')"
+installed_version="$(/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --version   | grep -iE "[0-9.]{10,20}" | tr -d " <>-:;/,&\"=#[a-z][A-Z]")"
+
+if [ "${chrome_latest_stable}" != "" ]; then # checks if version properly pulled
+  case "${installed_version}" in # compares the versions
+    "${chrome_latest_stable}")
+    echo "Chrome version checked OK (${installed_version})"
+    exit 0
+    ;;
+    *)
+    echo "Chrome version checked NEEDS UPDATE (${installed_version})"
+    if [[ -d "$file" ]]; then # uses the updater if detected
+      echo "`date`: Chrome Updater Found"
+      force_upgrade
+    else # otherwise install new version
+      echo "`date`: No Updater Found"
+      exit 0
+    fi
+    ;;
+  esac
+
+  if pgrep -xq -- 'Google Chrome'; then # after install, if running prompt restart
+    chrome_running
+  else
+    echo "chrome not running, no prompt needed"
+  fi
+
+  installed_version="$(/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --version   | grep -iE "[0-9.]{10,20}" | tr -d " <>-:;/,&\"=#[a-z][A-Z]")"
+  echo "Updated to: (${installed_version})"
+    
+  echo "`date`: Pushing New Version Information to Inventory" # push inventory data to jamf
+  sudo jamf recon
+
+  exit 0
+
+else
+  echo "connection down"
+fi;
